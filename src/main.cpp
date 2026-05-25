@@ -23,6 +23,11 @@
 #define IDC_SETTINGS 1005
 #define IDM_DELETE_SESSION 3001
 #define WM_GEAI_RESPONSE (WM_APP + 1)
+#define IDI_APP_ICON 1010
+
+#ifndef GEAI_VERSION
+#define GEAI_VERSION L"v1.0.0"
+#endif
 
 static const wchar_t* SEND_BUTTON_TEXT = L"Send\r\nCtrl+Enter";
 static const wchar_t* THINKING_BUTTON_TEXT = L"Gemini\r\nThinking...";
@@ -366,7 +371,7 @@ std::wstring CallGeminiWithConfig(const std::vector<Message>& context, Config cf
     if (uc.lpszExtraInfo) path += uc.lpszExtraInfo;
 
     DWORD access = cfg.proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY;
-    HINTERNET hSession = WinHttpOpen(L"Geai/0.5", access, cfg.proxy.empty() ? WINHTTP_NO_PROXY_NAME : cfg.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"Geai/1.0.0", access, cfg.proxy.empty() ? WINHTTP_NO_PROXY_NAME : cfg.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"WinHttpOpen failed.";
     WinHttpSetTimeouts(hSession, 15000, 15000, 30000, 60000);
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), uc.nPort, 0);
@@ -538,14 +543,21 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     gBgBrush = CreateSolidBrush(RGB(255,255,255));
     gPanelBrush = CreateSolidBrush(RGB(246,247,251));
     gInputBrush = CreateSolidBrush(RGB(255,255,255));
+    HICON appIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     WNDCLASSW wc{};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"GeaiWindow";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = appIcon;
     wc.hbrBackground = gBgBrush;
     RegisterClassW(&wc);
-    gMain = CreateWindowW(L"GeaiWindow", L"Geai - Gemini Windows Client", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 700, nullptr, nullptr, hInstance, nullptr);
+    std::wstring title = std::wstring(L"Geai ") + GEAI_VERSION + L" - Gemini Windows Client";
+    gMain = CreateWindowW(L"GeaiWindow", title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 700, nullptr, nullptr, hInstance, nullptr);
+    if (appIcon) {
+        SendMessageW(gMain, WM_SETICON, ICON_BIG, (LPARAM)appIcon);
+        SendMessageW(gMain, WM_SETICON, ICON_SMALL, (LPARAM)appIcon);
+    }
     ShowWindow(gMain, nCmdShow);
     UpdateWindow(gMain);
     MSG msg;
