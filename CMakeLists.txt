@@ -8,11 +8,15 @@ set(GEAI_ICON_B64 "${CMAKE_SOURCE_DIR}/assets/geai.ico.b64")
 set(GEAI_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 set(GEAI_ICON_FILE "${GEAI_GENERATED_DIR}/geai.ico")
 file(MAKE_DIRECTORY "${GEAI_GENERATED_DIR}")
+
 if(EXISTS "${GEAI_ICON_B64}")
-    file(READ "${GEAI_ICON_B64}" GEAI_ICON_BASE64)
-    string(STRIP "${GEAI_ICON_BASE64}" GEAI_ICON_BASE64)
-    string(BASE64_DECODE "${GEAI_ICON_BASE64}" GEAI_ICON_BYTES)
-    file(WRITE "${GEAI_ICON_FILE}" "${GEAI_ICON_BYTES}")
+    execute_process(
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command "[IO.File]::WriteAllBytes('${GEAI_ICON_FILE}', [Convert]::FromBase64String((Get-Content '${GEAI_ICON_B64}' -Raw).Trim()))"
+        RESULT_VARIABLE GEAI_ICON_RESULT
+    )
+    if(NOT GEAI_ICON_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to generate application icon from ${GEAI_ICON_B64}")
+    endif()
 endif()
 
 configure_file(src/resource.rc ${GEAI_GENERATED_DIR}/resource.rc @ONLY)
