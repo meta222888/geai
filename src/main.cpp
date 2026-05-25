@@ -26,6 +26,7 @@
 
 static const wchar_t* SEND_BUTTON_TEXT = L"Send\r\nCtrl+Enter";
 static const wchar_t* THINKING_BUTTON_TEXT = L"Gemini\r\nThinking...";
+static const size_t MAX_CONTEXT_MESSAGES = 20;
 
 struct Config {
     std::wstring apiKey;
@@ -174,6 +175,25 @@ std::wstring ExtractGeminiReply(const std::string& body) {
     auto msg = ExtractJsonString(body, "message");
     if (!msg.empty()) return NormalizeNewlines(Utf8ToWide("Error: " + msg));
     return NormalizeNewlines(Utf8ToWide(body));
+}
+
+std::string BuildGeminiRequestBody(const std::vector<Message>& messages) {
+    std::string body = "{\"contents\":[";
+    bool first = true;
+    size_t start = messages.size() > MAX_CONTEXT_MESSAGES ? messages.size() - MAX_CONTEXT_MESSAGES : 0;
+    for (size_t i = start; i < messages.size(); ++i) {
+        const auto& m = messages[i];
+        if (m.text.empty()) continue;
+        std::string role;
+        if (m.role == L"assistant") role = "model";
+        else if (m.role == L"user") role = "user";
+        else continue;
+        if (!first) body += ",";
+        first = false;
+        body += "{\"role\":\"" + role + "\",\"parts\":[{\"text\":\"" + JsonEscape(WideToUtf8(m.text)) + "\"}]}";
+    }
+    body += "]}";
+    return body;
 }
 
 std::wstring TrimTitle(std::wstring s) {
@@ -333,7 +353,7 @@ bool ParseUrl(const std::wstring& url, URL_COMPONENTS& uc, std::wstring& host, s
     return true;
 }
 
-std::wstring CallGeminiWithConfig(const std::wstring& prompt, Config cfg) {
+std::wstring CallGeminiWithConfig(const std::vector<Message>& context, Config cfg) {
     std::wstring base = cfg.apiBase;
     if (!base.empty() && base.back() == L'/') base.pop_back();
     bool official = base.find(L"generativelanguage.googleapis.com") != std::wstring::npos;
@@ -346,7 +366,7 @@ std::wstring CallGeminiWithConfig(const std::wstring& prompt, Config cfg) {
     if (uc.lpszExtraInfo) path += uc.lpszExtraInfo;
 
     DWORD access = cfg.proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY;
-    HINTERNET hSession = WinHttpOpen(L"Geai/0.4", access, cfg.proxy.empty() ? WINHTTP_NO_PROXY_NAME : cfg.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"Geai/0.5", access, cfg.proxy.empty() ? WINHTTP_NO_PROXY_NAME : cfg.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"WinHttpOpen failed.";
     WinHttpSetTimeouts(hSession, 15000, 15000, 30000, 60000);
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), uc.nPort, 0);
@@ -355,7 +375,7 @@ std::wstring CallGeminiWithConfig(const std::wstring& prompt, Config cfg) {
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return L"WinHttpOpenRequest failed."; }
 
-    std::string body = "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"" + JsonEscape(WideToUtf8(prompt)) + "\"}]}]}";
+    std::string body = BuildGeminiRequestBody(context);
     std::wstring headers = L"Content-Type: application/json\r\n";
     if (!official && !cfg.apiKey.empty()) headers += L"X-Geai-Token: " + cfg.apiKey + L"\r\n";
 
@@ -418,8 +438,9 @@ void SendPrompt() {
     SetWindowTextW(gSendBtn, THINKING_BUTTON_TEXT);
     Config cfg = gConfig;
     HWND hwnd = gMain;
-    std::thread([prompt, cfg, hwnd]() {
-        auto* result = new PendingResponse{ CallGeminiWithConfig(prompt, cfg) };
+    std::vector<Message> context = gMessages;
+    std::thread([context, cfg, hwnd]() {
+        auto* result = new PendingResponse{ CallGeminiWithConfig(context, cfg) };
         PostMessageW(hwnd, WM_GEAI_RESPONSE, 0, (LPARAM)result);
     }).detach();
 }
