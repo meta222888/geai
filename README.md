@@ -11,9 +11,10 @@ Geai 是一个小巧的原生 Windows Gemini 客户端。目标是：不用 Elec
 - API Base URL 设置，可直接使用官方 Gemini API 或自建代理
 - HTTP/HTTPS 代理设置
 - 本地会话记录，JSONL 保存
-- 一键新会话、保存会话、加载历史
+- 一键新会话、保存会话
 - Deno Deploy 免费代理示例
 - CMake + GitHub Actions Windows 构建
+- Windows `.bat` 一键调试运行 / Release 打包脚本
 
 ## 技术栈
 
@@ -23,9 +24,92 @@ Geai 是一个小巧的原生 Windows Gemini 客户端。目标是：不用 Elec
 - CMake
 - Deno Deploy proxy sample
 
-## 构建
+## 开发环境要求
 
-### Windows + Visual Studio
+推荐安装：
+
+- Windows 10/11
+- Visual Studio 2022 或 Visual Studio 2026
+- Desktop development with C++
+- C++ CMake tools for Windows
+- Windows 10/11 SDK
+- CMake
+
+如果提示 `cmake 不是内部或外部命令`，可以安装：
+
+```powershell
+winget install Kitware.CMake
+```
+
+安装后重新打开终端。
+
+## 一键脚本
+
+先拉取最新代码：
+
+```bat
+git pull
+```
+
+### 调试运行，默认 VS 2022
+
+```bat
+scripts\dev-run.bat
+```
+
+这个脚本会自动：
+
+1. 检查 CMake
+2. 配置 Debug 构建目录
+3. 编译 Debug 版本
+4. 启动 `build\Debug\Geai.exe`
+
+### 打包 Release，默认 VS 2022
+
+```bat
+scripts\release-package.bat
+```
+
+打包结果：
+
+```text
+dist\Geai-windows-x64.zip
+```
+
+包内包含：
+
+- `Geai.exe`
+- `README.md`
+- `LICENSE`
+- `deno-proxy/`
+
+### Visual Studio 2026 脚本
+
+如果你的 CMake 支持 `Visual Studio 18 2026` 生成器，可以使用：
+
+```bat
+scripts\dev-run-vs2026.bat
+scripts\release-package-vs2026.bat
+```
+
+如果 VS 2026 脚本失败，通常是当前 CMake 还没有识别 `Visual Studio 18 2026`，可以改用默认脚本，或直接用 Visual Studio 打开项目文件夹。
+
+### 清理构建文件
+
+```bat
+scripts\clean.bat
+```
+
+会删除：
+
+```text
+build/
+dist/
+```
+
+## 手动构建
+
+### Windows + Visual Studio 2022
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -36,6 +120,14 @@ cmake --build build --config Release
 
 ```text
 build/Release/Geai.exe
+```
+
+### Debug 手动运行
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Debug
+.\build\Debug\Geai.exe
 ```
 
 ## 使用
@@ -110,6 +202,13 @@ export GEMINI_API_KEY="你的 Gemini API Key"
 deno task dev
 ```
 
+Windows PowerShell 可以这样设置环境变量：
+
+```powershell
+$env:GEMINI_API_KEY="你的 Gemini API Key"
+deno task dev
+```
+
 本地 API Base：
 
 ```text
@@ -123,6 +222,12 @@ Geai/
 ├── src/
 │   ├── main.cpp
 │   └── resource.rc
+├── scripts/
+│   ├── dev-run.bat
+│   ├── release-package.bat
+│   ├── dev-run-vs2026.bat
+│   ├── release-package-vs2026.bat
+│   └── clean.bat
 ├── deno-proxy/
 │   ├── main.ts
 │   └── deno.json
@@ -131,8 +236,7 @@ Geai/
 ├── .github/workflows/build.yml
 ├── CMakeLists.txt
 ├── README.md
-├── LICENSE
-└── .gitignore
+└── LICENSE
 ```
 
 ## 后续建议功能
