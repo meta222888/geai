@@ -10,61 +10,54 @@ Geai 是一个小巧的原生 Windows Gemini 客户端。目标是：不用 Elec
 - Gemini API Key 设置
 - API Base URL 设置，可直接使用官方 Gemini API 或自建代理
 - HTTP/HTTPS 代理设置
-- 本地会话记录，JSONL 保存
-- 一键新会话、保存会话
+- 本地会话记录，JSONL 自动保存
+- 左侧会话列表，最近聊天在最上面
+- 右键删除会话
+- 客户端自动提取 Gemini 正文，不直接显示完整 JSON
 - Deno Deploy 免费代理示例
+- Deno 代理认证示例，避免代理被公开滥用
 - CMake + GitHub Actions Windows 构建
 - Windows `.bat` 一键调试运行 / Release 打包脚本
 
-## 技术栈
+## 使用 Deno 认证代理
 
-- C++20
-- Win32 API
-- WinHTTP
-- CMake
-- Deno Deploy proxy sample
+推荐使用认证版代理：
 
-## 开发环境要求
-
-推荐安装：
-
-- Windows 10/11
-- Visual Studio 2022 或 Visual Studio 2026
-- Desktop development with C++
-- C++ CMake tools for Windows
-- Windows 10/11 SDK
-- CMake
-
-如果提示 `cmake 不是内部或外部命令`，可以安装：
-
-```powershell
-winget install Kitware.CMake
+```text
+deno-proxy/authenticated-main.ts
 ```
 
-安装后重新打开终端。
+Deno Deploy 环境变量设置：
 
-## 一键脚本
+```text
+GEMINI_API_KEY=你的 Gemini API Key
+GEAI_PROXY_TOKEN=你自己设置的一串随机密码
+```
 
-先拉取最新代码：
+Geai 客户端 Settings：
+
+```text
+API Base = https://你的-deno-地址
+API Key = GEAI_PROXY_TOKEN 的值
+Model = gemini-2.5-flash
+```
+
+说明：
+
+- 直接使用 Gemini 官方 API 时，API Key 就是 Gemini API Key
+- 使用 Deno 代理时，API Key 作为代理认证 token 使用
+- 客户端会通过 `X-Geai-Token` 请求头发送认证 token
+- Deno 代理会在服务端使用 `GEMINI_API_KEY` 调用 Gemini
+
+## 开发环境运行
 
 ```bat
 git pull
-```
-
-### 调试运行，默认 VS 2022
-
-```bat
+scripts\clean.bat
 scripts\dev-run.bat
 ```
 
-这个脚本会自动：
-
-1. 检查 CMake
-2. 配置 Debug 构建目录
-3. 编译 Debug 版本
-4. 启动 `build\Debug\Geai.exe`
-
-### 打包 Release，默认 VS 2022
+## 打包 Release
 
 ```bat
 scripts\release-package.bat
@@ -76,40 +69,30 @@ scripts\release-package.bat
 dist\Geai-windows-x64.zip
 ```
 
-包内包含：
+## 开发环境要求
 
-- `Geai.exe`
-- `README.md`
-- `LICENSE`
-- `deno-proxy/`
+- Windows 10/11
+- Visual Studio 2022 或 Visual Studio 2026
+- Desktop development with C++
+- C++ CMake tools for Windows
+- Windows 10/11 SDK
+- CMake
 
-### Visual Studio 2026 脚本
+如果提示 `cmake 不是内部或外部命令`，需要安装 CMake 并重新打开终端。
 
-如果你的 CMake 支持 `Visual Studio 18 2026` 生成器，可以使用：
-
-```bat
-scripts\dev-run-vs2026.bat
-scripts\release-package-vs2026.bat
-```
-
-如果 VS 2026 脚本失败，通常是当前 CMake 还没有识别 `Visual Studio 18 2026`，可以改用默认脚本，或直接用 Visual Studio 打开项目文件夹。
-
-### 清理构建文件
-
-```bat
-scripts\clean.bat
-```
-
-会删除：
+## 配置文件位置
 
 ```text
-build/
-dist/
+%APPDATA%\Geai\config.ini
+```
+
+会话记录位置：
+
+```text
+%APPDATA%\Geai\sessions\
 ```
 
 ## 手动构建
-
-### Windows + Visual Studio 2022
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -122,104 +105,22 @@ cmake --build build --config Release
 build/Release/Geai.exe
 ```
 
-### Debug 手动运行
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Debug
-.\build\Debug\Geai.exe
-```
-
-## 使用
-
-首次启动后点击 **Settings**：
-
-- API Key：你的 Gemini API Key；如果使用 Deno 代理，可以留空
-- API Base：默认 `https://generativelanguage.googleapis.com`；使用 Deno 代理时填你的 Deno 地址
-- Model：默认 `gemini-2.5-flash`
-- Proxy：可选，例如 `http://127.0.0.1:7890`
-
-如果出现 `models/gemini-1.5-flash is not found`，请把 Settings 里的 Model 改成：
-
-```text
-gemini-2.5-flash
-```
-
-也可以尝试：
-
-```text
-gemini-flash-latest
-```
-
-配置文件保存在：
-
-```text
-%APPDATA%\Geai\config.ini
-```
-
-会话记录保存在：
-
-```text
-%APPDATA%\Geai\sessions\
-```
-
-## 自建免费 Deno Gemini 代理
-
-如果你不想在客户端直接暴露 Gemini API Key，可以用 Deno Deploy 创建一个免费代理。
-
-### 1. 创建 Deno Deploy 项目
-
-打开 Deno Deploy，新建项目。
-
-### 2. 添加环境变量
-
-在项目环境变量中添加：
-
-```text
-GEMINI_API_KEY=你的 Gemini API Key
-```
-
-### 3. 部署代理代码
-
-把仓库中的 `deno-proxy/main.ts` 直接部署到 Deno Deploy。
-
-### 4. 在 Geai 中设置 API Base
-
-假设你的 Deno Deploy 地址是：
-
-```text
-https://your-project.deno.dev
-```
-
-那么 Geai 设置中：
-
-```text
-API Base = https://your-project.deno.dev
-API Key = 留空或任意字符串
-Model = gemini-2.5-flash
-```
-
-客户端会请求：
-
-```text
-/v1beta/models/{model}:generateContent
-```
-
-代理会自动转发到 Gemini 官方 API，并使用服务端环境变量中的 `GEMINI_API_KEY`。
-
-## Deno 本地运行代理
+## Deno 本地运行认证代理
 
 ```bash
 cd deno-proxy
 export GEMINI_API_KEY="你的 Gemini API Key"
-deno task dev
+export GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
+deno run --allow-net --allow-env authenticated-main.ts
 ```
 
-Windows PowerShell 可以这样设置环境变量：
+Windows PowerShell：
 
 ```powershell
+cd deno-proxy
 $env:GEMINI_API_KEY="你的 Gemini API Key"
-deno task dev
+$env:GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
+deno run --allow-net --allow-env authenticated-main.ts
 ```
 
 本地 API Base：
@@ -243,6 +144,7 @@ Geai/
 │   └── clean.bat
 ├── deno-proxy/
 │   ├── main.ts
+│   ├── authenticated-main.ts
 │   └── deno.json
 ├── docs/
 │   └── ROADMAP.md
