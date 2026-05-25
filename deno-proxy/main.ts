@@ -1,11 +1,12 @@
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
+const GEAI_PROXY_TOKEN = Deno.env.get("GEAI_PROXY_TOKEN") ?? "";
 const GEMINI_BASE = "https://generativelanguage.googleapis.com";
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, authorization, x-goog-api-key",
+    "Access-Control-Allow-Headers": "content-type, x-geai-token",
   };
 }
 
@@ -34,6 +35,11 @@ function extractGeminiText(data: any): string {
   return JSON.stringify(data, null, 2);
 }
 
+function isAuthorized(req: Request): boolean {
+  if (!GEAI_PROXY_TOKEN) return false;
+  return (req.headers.get("x-geai-token") ?? "") === GEAI_PROXY_TOKEN;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -45,15 +51,16 @@ Deno.serve(async (req: Request) => {
       ok: true,
       name: "Geai Gemini Proxy",
       hasGeminiApiKey: GEMINI_API_KEY.length > 0,
-      geminiApiKeyLength: GEMINI_API_KEY.length,
+      hasProxyToken: GEAI_PROXY_TOKEN.length > 0,
     });
   }
 
   if (!GEMINI_API_KEY) {
-    return json({
-      error: "Missing GEMINI_API_KEY",
-      hint: "Set GEMINI_API_KEY in Deno Deploy Environment Variables, then redeploy the app.",
-    }, { status: 500 });
+    return json({ error: "Missing GEMINI_API_KEY" }, { status: 500 });
+  }
+
+  if (!isAuthorized(req)) {
+    return json({ error: "Unauthorized" }, { status: 401 });
   }
 
   if (!url.pathname.startsWith("/v1beta/")) {
@@ -65,8 +72,8 @@ Deno.serve(async (req: Request) => {
 
   const headers = new Headers(req.headers);
   headers.delete("host");
-  headers.delete("authorization");
   headers.delete("x-goog-api-key");
+  headers.delete("x-geai-token");
   headers.set("content-type", headers.get("content-type") ?? "application/json");
 
   const resp = await fetch(target, {
@@ -77,8 +84,7 @@ Deno.serve(async (req: Request) => {
 
   const raw = await resp.text();
   try {
-    const data = JSON.parse(raw);
-    return text(extractGeminiText(data), {
+    return text(extractGeminiText(JSON.parse(raw)), {
       status: resp.ok ? 200 : resp.status,
       statusText: resp.statusText,
     });
