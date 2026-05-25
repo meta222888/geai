@@ -25,7 +25,7 @@
 #define WM_GEAI_RESPONSE (WM_APP + 1)
 
 static const wchar_t* SEND_BUTTON_TEXT = L"Send\r\nCtrl+Enter";
-static const wchar_t* THINKING_BUTTON_TEXT = L"Gemini\r\n正在思考...";
+static const wchar_t* THINKING_BUTTON_TEXT = L"Gemini\r\nThinking...";
 
 struct Config {
     std::wstring apiKey;
