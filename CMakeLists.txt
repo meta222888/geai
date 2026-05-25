@@ -10,4 +10,5 @@ add_executable(Geai WIN32
 )
 
 target_compile_definitions(Geai PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+target_compile_options(Geai PRIVATE /FIwindowsx.h)
 target_link_libraries(Geai PRIVATE winhttp comctl32)
