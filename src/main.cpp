@@ -47,7 +47,7 @@ static Config gConfig;
 static std::vector<Message> gMessages;
 static std::vector<SessionItem> gSessions;
 static std::wstring gCurrentSessionPath;
-static int gRightClickedSession = -1;
+static std::wstring gRightClickedSessionPath;
 static bool gRequestInFlight = false;
 
 void SendPrompt();
@@ -58,17 +58,10 @@ std::wstring NormalizeNewlines(const std::wstring& s) {
     for (size_t i = 0; i < s.size(); ++i) {
         wchar_t ch = s[i];
         if (ch == L'\r') {
-            if (i + 1 < s.size() && s[i + 1] == L'\n') {
-                out += L"\r\n";
-                ++i;
-            } else {
-                out += L"\r\n";
-            }
-        } else if (ch == L'\n') {
-            out += L"\r\n";
-        } else {
-            out += ch;
-        }
+            if (i + 1 < s.size() && s[i + 1] == L'\n') { out += L"\r\n"; ++i; }
+            else out += L"\r\n";
+        } else if (ch == L'\n') out += L"\r\n";
+        else out += ch;
     }
     return out;
 }
@@ -165,9 +158,7 @@ std::string ExtractJsonString(const std::string& json, const std::string& key, s
 
 std::wstring ExtractGeminiReply(const std::string& body) {
     if (body.empty()) return L"";
-    if (body.find("\"candidates\"") == std::string::npos && body.find("\"error\"") == std::string::npos) {
-        return NormalizeNewlines(Utf8ToWide(body));
-    }
+    if (body.find("\"candidates\"") == std::string::npos && body.find("\"error\"") == std::string::npos) return NormalizeNewlines(Utf8ToWide(body));
     std::string text;
     size_t pos = 0;
     while (true) {
@@ -274,8 +265,11 @@ void RefreshSessionList() {
 }
 
 void SelectCurrentSessionInList() {
-    for (size_t i = 0; i < gSessions.size(); ++i) if (gSessions[i].path == gCurrentSessionPath) {
-        SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)i, 0); return;
+    for (size_t i = 0; i < gSessions.size(); ++i) {
+        if (gSessions[i].path == gCurrentSessionPath) {
+            SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)i, 0);
+            return;
+        }
     }
     SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)-1, 0);
 }
@@ -301,15 +295,29 @@ void NewSession() {
     SetFocus(gInput);
 }
 
-void DeleteSessionByIndex(int index) {
-    if (gRequestInFlight) return;
-    if (index < 0 || index >= (int)gSessions.size()) return;
-    std::wstring path = gSessions[index].path;
+void ClearCurrentSessionUi() {
+    gMessages.clear();
+    gCurrentSessionPath.clear();
+    SetWindowTextW(gChat, L"");
+    SetWindowTextW(gInput, L"");
+}
+
+void DeleteSessionByPath(const std::wstring& path) {
+    if (gRequestInFlight || path.empty()) return;
     if (MessageBoxW(gMain, L"Delete this conversation?", L"Geai", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+
+    bool deletingCurrent = (path == gCurrentSessionPath);
     std::error_code ec;
     std::filesystem::remove(path, ec);
-    if (path == gCurrentSessionPath) NewSession();
+
+    if (ec) {
+        MessageBoxW(gMain, (L"Delete failed:\n" + Utf8ToWide(ec.message())).c_str(), L"Geai", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    if (deletingCurrent) ClearCurrentSessionUi();
     RefreshSessionList();
+    SelectCurrentSessionInList();
 }
 
 bool ParseUrl(const std::wstring& url, URL_COMPONENTS& uc, std::wstring& host, std::wstring& path) {
@@ -470,16 +478,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (LOWORD(wp) == IDC_NEW) NewSession();
         else if (LOWORD(wp) == IDC_SETTINGS) DialogBoxW(gInst, MAKEINTRESOURCEW(101), hwnd, SettingsProc);
         else if (LOWORD(wp) == IDC_SESSION_LIST && HIWORD(wp) == LBN_SELCHANGE) LoadSessionByIndex((int)SendMessageW(gSessionList, LB_GETCURSEL, 0, 0));
-        else if (LOWORD(wp) == IDM_DELETE_SESSION) DeleteSessionByIndex(gRightClickedSession);
+        else if (LOWORD(wp) == IDM_DELETE_SESSION) DeleteSessionByPath(gRightClickedSessionPath);
         return 0;
     case WM_CONTEXTMENU:
         if ((HWND)wp == gSessionList) {
             POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }, client = pt;
             ScreenToClient(gSessionList, &client);
             int hit = (int)SendMessageW(gSessionList, LB_ITEMFROMPOINT, 0, MAKELPARAM(client.x, client.y));
-            if (HIWORD(hit) == 0) {
-                gRightClickedSession = LOWORD(hit);
-                SendMessageW(gSessionList, LB_SETCURSEL, gRightClickedSession, 0);
+            int idx = LOWORD(hit);
+            if (HIWORD(hit) == 0 && idx >= 0 && idx < (int)gSessions.size()) {
+                gRightClickedSessionPath = gSessions[idx].path;
                 HMENU menu = CreatePopupMenu();
                 AppendMenuW(menu, MF_STRING, IDM_DELETE_SESSION, L"Delete conversation");
                 TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
