@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #pragma comment(lib, "winhttp.lib")
@@ -21,6 +22,7 @@
 #define IDC_NEW 1004
 #define IDC_SETTINGS 1005
 #define IDM_DELETE_SESSION 3001
+#define WM_GEAI_RESPONSE (WM_APP + 1)
 
 struct Config {
     std::wstring apiKey;
@@ -31,6 +33,7 @@ struct Config {
 
 struct Message { std::wstring role; std::wstring text; };
 struct SessionItem { std::wstring title; std::wstring path; std::filesystem::file_time_type modified; };
+struct PendingResponse { std::wstring text; };
 
 static HINSTANCE gInst;
 static HWND gMain, gSidebar, gSessionList, gChat, gInput, gSendBtn, gNewBtn, gSettingsBtn;
@@ -41,6 +44,28 @@ static std::vector<Message> gMessages;
 static std::vector<SessionItem> gSessions;
 static std::wstring gCurrentSessionPath;
 static int gRightClickedSession = -1;
+static bool gRequestInFlight = false;
+
+std::wstring NormalizeNewlines(const std::wstring& s) {
+    std::wstring out;
+    out.reserve(s.size() + 16);
+    for (size_t i = 0; i < s.size(); ++i) {
+        wchar_t ch = s[i];
+        if (ch == L'\r') {
+            if (i + 1 < s.size() && s[i + 1] == L'\n') {
+                out += L"\r\n";
+                ++i;
+            } else {
+                out += L"\r\n";
+            }
+        } else if (ch == L'\n') {
+            out += L"\r\n";
+        } else {
+            out += ch;
+        }
+    }
+    return out;
+}
 
 std::wstring AppDir() {
     wchar_t* appData = nullptr;
@@ -135,7 +160,7 @@ std::string ExtractJsonString(const std::string& json, const std::string& key, s
 std::wstring ExtractGeminiReply(const std::string& body) {
     if (body.empty()) return L"";
     if (body.find("\"candidates\"") == std::string::npos && body.find("\"error\"") == std::string::npos) {
-        return Utf8ToWide(body);
+        return NormalizeNewlines(Utf8ToWide(body));
     }
     std::string text;
     size_t pos = 0;
@@ -148,10 +173,10 @@ std::wstring ExtractGeminiReply(const std::string& body) {
         if (found == std::string::npos) break;
         pos = found + 6;
     }
-    if (!text.empty()) return Utf8ToWide(text);
+    if (!text.empty()) return NormalizeNewlines(Utf8ToWide(text));
     auto msg = ExtractJsonString(body, "message");
-    if (!msg.empty()) return Utf8ToWide("Error: " + msg);
-    return Utf8ToWide(body);
+    if (!msg.empty()) return NormalizeNewlines(Utf8ToWide("Error: " + msg));
+    return NormalizeNewlines(Utf8ToWide(body));
 }
 
 std::wstring TrimTitle(std::wstring s) {
@@ -189,7 +214,7 @@ void AppendChat(const std::wstring& role, const std::wstring& text) {
     std::wstring name = role == L"user" ? L"You" : (role == L"assistant" ? L"Gemini" : L"Geai");
     int len = GetWindowTextLengthW(gChat);
     SendMessageW(gChat, EM_SETSEL, len, len);
-    std::wstring line = L"\r\n" + name + L"\r\n" + text + L"\r\n";
+    std::wstring line = L"\r\n" + name + L"\r\n" + NormalizeNewlines(text) + L"\r\n";
     SendMessageW(gChat, EM_REPLACESEL, FALSE, (LPARAM)line.c_str());
 }
 
@@ -251,6 +276,7 @@ void SelectCurrentSessionInList() {
 
 void LoadSessionByIndex(int index) {
     if (index < 0 || index >= (int)gSessions.size()) return;
+    if (gRequestInFlight) return;
     SaveCurrentSession();
     gCurrentSessionPath = gSessions[index].path;
     gMessages = ReadSessionMessages(gCurrentSessionPath);
@@ -259,6 +285,7 @@ void LoadSessionByIndex(int index) {
 }
 
 void NewSession() {
+    if (gRequestInFlight) return;
     SaveCurrentSession();
     gMessages.clear();
     gCurrentSessionPath.clear();
@@ -269,6 +296,7 @@ void NewSession() {
 }
 
 void DeleteSessionByIndex(int index) {
+    if (gRequestInFlight) return;
     if (index < 0 || index >= (int)gSessions.size()) return;
     std::wstring path = gSessions[index].path;
     if (MessageBoxW(gMain, L"Delete this conversation?", L"Geai", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
@@ -291,21 +319,22 @@ bool ParseUrl(const std::wstring& url, URL_COMPONENTS& uc, std::wstring& host, s
     return true;
 }
 
-std::wstring CallGemini(const std::wstring& prompt) {
-    std::wstring base = gConfig.apiBase;
+std::wstring CallGeminiWithConfig(const std::wstring& prompt, Config cfg) {
+    std::wstring base = cfg.apiBase;
     if (!base.empty() && base.back() == L'/') base.pop_back();
     bool official = base.find(L"generativelanguage.googleapis.com") != std::wstring::npos;
-    std::wstring url = base + L"/v1beta/models/" + gConfig.model + L":generateContent";
-    if (official) url += L"?key=" + gConfig.apiKey;
+    std::wstring url = base + L"/v1beta/models/" + cfg.model + L":generateContent";
+    if (official) url += L"?key=" + cfg.apiKey;
 
     URL_COMPONENTS uc{};
     std::wstring host, path;
     if (!ParseUrl(url, uc, host, path)) return L"Invalid API Base URL.";
     if (uc.lpszExtraInfo) path += uc.lpszExtraInfo;
 
-    DWORD access = gConfig.proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY;
-    HINTERNET hSession = WinHttpOpen(L"Geai/0.3", access, gConfig.proxy.empty() ? WINHTTP_NO_PROXY_NAME : gConfig.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
+    DWORD access = cfg.proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY;
+    HINTERNET hSession = WinHttpOpen(L"Geai/0.4", access, cfg.proxy.empty() ? WINHTTP_NO_PROXY_NAME : cfg.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"WinHttpOpen failed.";
+    WinHttpSetTimeouts(hSession, 15000, 15000, 30000, 60000);
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), uc.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return L"WinHttpConnect failed."; }
     DWORD flags = uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
@@ -314,10 +343,8 @@ std::wstring CallGemini(const std::wstring& prompt) {
 
     std::string body = "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"" + JsonEscape(WideToUtf8(prompt)) + "\"}]}]}";
     std::wstring headers = L"Content-Type: application/json\r\n";
-    if (!official && !gConfig.apiKey.empty()) {
-        headers += L"X-Geai-Token: " + gConfig.apiKey + L"\r\n";
-        headers += L"Authorization: Bearer " + gConfig.apiKey + L"\r\n";
-    }
+    if (!official && !cfg.apiKey.empty()) headers += L"X-Geai-Token: " + cfg.apiKey + L"\r\n";
+
     BOOL ok = WinHttpSendRequest(hRequest, headers.c_str(), -1, (LPVOID)body.data(), (DWORD)body.size(), (DWORD)body.size(), 0);
     if (ok) ok = WinHttpReceiveResponse(hRequest, nullptr);
 
@@ -361,6 +388,7 @@ INT_PTR CALLBACK SettingsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM) {
 }
 
 void SendPrompt() {
+    if (gRequestInFlight) return;
     int len = GetWindowTextLengthW(gInput);
     if (len <= 0) return;
     std::wstring prompt(len, 0);
@@ -369,13 +397,17 @@ void SendPrompt() {
     gMessages.push_back({ L"user", prompt });
     AppendChat(L"user", prompt);
     SaveCurrentSession(); RefreshSessionList(); SelectCurrentSessionInList();
+
+    gRequestInFlight = true;
     EnableWindow(gSendBtn, FALSE);
-    std::wstring answer = CallGemini(prompt);
-    gMessages.push_back({ L"assistant", answer });
-    AppendChat(L"assistant", answer);
-    SaveCurrentSession(); RefreshSessionList(); SelectCurrentSessionInList();
-    EnableWindow(gSendBtn, TRUE);
-    SetFocus(gInput);
+    EnableWindow(gInput, FALSE);
+    SetWindowTextW(gSendBtn, L"...");
+    Config cfg = gConfig;
+    HWND hwnd = gMain;
+    std::thread([prompt, cfg, hwnd]() {
+        auto* result = new PendingResponse{ CallGeminiWithConfig(prompt, cfg) };
+        PostMessageW(hwnd, WM_GEAI_RESPONSE, 0, (LPARAM)result);
+    }).detach();
 }
 
 void Layout(HWND hwnd) {
@@ -403,6 +435,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         gSendBtn = CreateWindowW(L"BUTTON", L"Send", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 868, 448, 104, 86, hwnd, (HMENU)IDC_SEND, gInst, nullptr);
         SetControlFont(gNewBtn); SetControlFont(gSettingsBtn); SetControlFont(gSessionList); SetControlFont(gChat); SetControlFont(gInput); SetControlFont(gSendBtn);
         RefreshSessionList(); Layout(hwnd); return 0;
+    case WM_GEAI_RESPONSE: {
+        PendingResponse* result = (PendingResponse*)lp;
+        std::wstring answer = result ? result->text : L"Request failed.";
+        delete result;
+        gMessages.push_back({ L"assistant", answer });
+        AppendChat(L"assistant", answer);
+        SaveCurrentSession(); RefreshSessionList(); SelectCurrentSessionInList();
+        gRequestInFlight = false;
+        EnableWindow(gInput, TRUE);
+        EnableWindow(gSendBtn, TRUE);
+        SetWindowTextW(gSendBtn, L"Send");
+        SetFocus(gInput);
+        return 0;
+    }
     case WM_SIZE: Layout(hwnd); return 0;
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_SEND) SendPrompt();
