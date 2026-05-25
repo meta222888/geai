@@ -9,6 +9,13 @@ function corsHeaders() {
   };
 }
 
+function json(data: unknown, init: ResponseInit = {}) {
+  const headers = new Headers(init.headers);
+  for (const [k, v] of Object.entries(corsHeaders())) headers.set(k, v);
+  headers.set("content-type", "application/json; charset=utf-8");
+  return Response.json(data, { ...init, headers });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -16,15 +23,23 @@ Deno.serve(async (req: Request) => {
 
   const url = new URL(req.url);
   if (url.pathname === "/" || url.pathname === "/health") {
-    return Response.json({ ok: true, name: "Geai Gemini Proxy" }, { headers: corsHeaders() });
+    return json({
+      ok: true,
+      name: "Geai Gemini Proxy",
+      hasGeminiApiKey: GEMINI_API_KEY.length > 0,
+      geminiApiKeyLength: GEMINI_API_KEY.length,
+    });
   }
 
   if (!GEMINI_API_KEY) {
-    return Response.json({ error: "Missing GEMINI_API_KEY" }, { status: 500, headers: corsHeaders() });
+    return json({
+      error: "Missing GEMINI_API_KEY",
+      hint: "Set GEMINI_API_KEY in Deno Deploy Environment Variables, then redeploy the app.",
+    }, { status: 500 });
   }
 
   if (!url.pathname.startsWith("/v1beta/")) {
-    return Response.json({ error: "Only /v1beta/* is supported" }, { status: 404, headers: corsHeaders() });
+    return json({ error: "Only /v1beta/* is supported" }, { status: 404 });
   }
 
   const target = new URL(GEMINI_BASE + url.pathname + url.search);
