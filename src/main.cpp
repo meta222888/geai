@@ -23,7 +23,7 @@
 struct Config {
     std::wstring apiKey;
     std::wstring apiBase = L"https://generativelanguage.googleapis.com";
-    std::wstring model = L"gemini-1.5-flash";
+    std::wstring model = L"gemini-2.5-flash";
     std::wstring proxy;
 };
 
@@ -90,7 +90,7 @@ std::wstring ReadIniValue(const wchar_t* section, const wchar_t* key, const wcha
 void LoadConfig() {
     gConfig.apiKey = ReadIniValue(L"gemini", L"api_key", L"");
     gConfig.apiBase = ReadIniValue(L"gemini", L"api_base", L"https://generativelanguage.googleapis.com");
-    gConfig.model = ReadIniValue(L"gemini", L"model", L"gemini-1.5-flash");
+    gConfig.model = ReadIniValue(L"gemini", L"model", L"gemini-2.5-flash");
     gConfig.proxy = ReadIniValue(L"network", L"proxy", L"");
 }
 
