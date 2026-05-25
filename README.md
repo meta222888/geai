@@ -134,10 +134,22 @@ cmake --build build --config Debug
 
 首次启动后点击 **Settings**：
 
-- API Key：你的 Gemini API Key
-- API Base：默认 `https://generativelanguage.googleapis.com`
-- Model：默认 `gemini-1.5-flash`
+- API Key：你的 Gemini API Key；如果使用 Deno 代理，可以留空
+- API Base：默认 `https://generativelanguage.googleapis.com`；使用 Deno 代理时填你的 Deno 地址
+- Model：默认 `gemini-2.5-flash`
 - Proxy：可选，例如 `http://127.0.0.1:7890`
+
+如果出现 `models/gemini-1.5-flash is not found`，请把 Settings 里的 Model 改成：
+
+```text
+gemini-2.5-flash
+```
+
+也可以尝试：
+
+```text
+gemini-flash-latest
+```
 
 配置文件保存在：
 
@@ -184,6 +196,7 @@ https://your-project.deno.dev
 ```text
 API Base = https://your-project.deno.dev
 API Key = 留空或任意字符串
+Model = gemini-2.5-flash
 ```
 
 客户端会请求：
