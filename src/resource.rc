@@ -1,5 +1,43 @@
 #include <windows.h>
 
+#ifndef GEAI_VERSION
+#define GEAI_VERSION L"v1.0.0"
+#endif
+
+IDI_APP_ICON ICON "@GEAI_ICON_FILE@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Geai"
+            VALUE "FileDescription", "Geai Gemini Windows Client"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "InternalName", "Geai"
+            VALUE "OriginalFilename", "Geai.exe"
+            VALUE "ProductName", "Geai"
+            VALUE "ProductVersion", "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+
 101 DIALOGEX 0, 0, 260, 150
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Geai Settings"
