@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-net --allow-env main.ts"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "semiColons": true
+  }
+}
