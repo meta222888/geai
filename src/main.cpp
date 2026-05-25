@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <winhttp.h>
 #include <commctrl.h>
 
@@ -28,20 +29,12 @@ struct Config {
     std::wstring proxy;
 };
 
-struct Message {
-    std::wstring role;
-    std::wstring text;
-};
-
-struct SessionItem {
-    std::wstring title;
-    std::wstring path;
-    std::filesystem::file_time_type modified;
-};
+struct Message { std::wstring role; std::wstring text; };
+struct SessionItem { std::wstring title; std::wstring path; std::filesystem::file_time_type modified; };
 
 static HINSTANCE gInst;
 static HWND gMain, gSidebar, gSessionList, gChat, gInput, gSendBtn, gNewBtn, gSettingsBtn;
-static HFONT gFont, gTitleFont;
+static HFONT gFont;
 static HBRUSH gBgBrush, gPanelBrush, gInputBrush;
 static Config gConfig;
 static std::vector<Message> gMessages;
@@ -82,7 +75,7 @@ std::wstring Utf8ToWide(const std::string& s) {
 std::string JsonEscape(const std::string& s) {
     std::string out;
     for (char c : s) {
-    switch (c) {
+        switch (c) {
         case '"': out += "\\\""; break;
         case '\\': out += "\\\\"; break;
         case '\n': out += "\\n"; break;
@@ -102,6 +95,8 @@ std::string JsonUnescape(const std::string& s) {
             if (c == 'n') out += '\n';
             else if (c == 't') out += '\t';
             else if (c == 'r') out += '\r';
+            else if (c == '"') out += '"';
+            else if (c == '\\') out += '\\';
             else out += c;
             esc = false;
         } else if (c == '\\') esc = true;
@@ -110,24 +105,53 @@ std::string JsonUnescape(const std::string& s) {
     return out;
 }
 
-std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    std::string token = "\"" + key + "\":\"";
-    auto pos = json.find(token);
-    if (pos == std::string::npos) return {};
-    pos += token.size();
-    std::string out;
-    bool esc = false;
-    for (; pos < json.size(); ++pos) {
-        char c = json[pos];
-        if (esc) {
-            out += '\\';
-            out += c;
-            esc = false;
-        } else if (c == '\\') esc = true;
-        else if (c == '"') break;
-        else out += c;
+std::string ExtractJsonString(const std::string& json, const std::string& key, size_t start = 0) {
+    std::string token = "\"" + key + "\"";
+    size_t pos = json.find(token, start);
+    while (pos != std::string::npos) {
+        pos += token.size();
+        while (pos < json.size() && isspace((unsigned char)json[pos])) pos++;
+        if (pos < json.size() && json[pos] == ':') {
+            pos++;
+            while (pos < json.size() && isspace((unsigned char)json[pos])) pos++;
+            if (pos < json.size() && json[pos] == '"') {
+                pos++;
+                std::string out;
+                bool esc = false;
+                for (; pos < json.size(); ++pos) {
+                    char c = json[pos];
+                    if (esc) { out += '\\'; out += c; esc = false; }
+                    else if (c == '\\') esc = true;
+                    else if (c == '"') return JsonUnescape(out);
+                    else out += c;
+                }
+            }
+        }
+        pos = json.find(token, pos);
     }
-    return JsonUnescape(out);
+    return {};
+}
+
+std::wstring ExtractGeminiReply(const std::string& body) {
+    if (body.empty()) return L"";
+    if (body.find("\"candidates\"") == std::string::npos && body.find("\"error\"") == std::string::npos) {
+        return Utf8ToWide(body);
+    }
+    std::string text;
+    size_t pos = 0;
+    while (true) {
+        auto t = ExtractJsonString(body, "text", pos);
+        if (t.empty()) break;
+        if (!text.empty()) text += "\n";
+        text += t;
+        auto found = body.find("\"text\"", pos);
+        if (found == std::string::npos) break;
+        pos = found + 6;
+    }
+    if (!text.empty()) return Utf8ToWide(text);
+    auto msg = ExtractJsonString(body, "message");
+    if (!msg.empty()) return Utf8ToWide("Error: " + msg);
+    return Utf8ToWide(body);
 }
 
 std::wstring TrimTitle(std::wstring s) {
@@ -161,23 +185,17 @@ void SaveConfig() {
 
 void SetControlFont(HWND h) { SendMessageW(h, WM_SETFONT, (WPARAM)gFont, TRUE); }
 
-void RenderChat() {
-    SetWindowTextW(gChat, L"");
-    for (const auto& m : gMessages) {
-        std::wstring name = m.role == L"user" ? L"You" : (m.role == L"assistant" ? L"Gemini" : L"Geai");
-        int len = GetWindowTextLengthW(gChat);
-        SendMessageW(gChat, EM_SETSEL, len, len);
-        std::wstring block = L"\r\n" + name + L"\r\n" + m.text + L"\r\n";
-        SendMessageW(gChat, EM_REPLACESEL, FALSE, (LPARAM)block.c_str());
-    }
-}
-
 void AppendChat(const std::wstring& role, const std::wstring& text) {
     std::wstring name = role == L"user" ? L"You" : (role == L"assistant" ? L"Gemini" : L"Geai");
     int len = GetWindowTextLengthW(gChat);
     SendMessageW(gChat, EM_SETSEL, len, len);
     std::wstring line = L"\r\n" + name + L"\r\n" + text + L"\r\n";
     SendMessageW(gChat, EM_REPLACESEL, FALSE, (LPARAM)line.c_str());
+}
+
+void RenderChat() {
+    SetWindowTextW(gChat, L"");
+    for (const auto& m : gMessages) AppendChat(m.role, m.text);
 }
 
 std::wstring MakeSessionPath() {
@@ -208,9 +226,7 @@ std::vector<Message> ReadSessionMessages(const std::wstring& path) {
 
 std::wstring SessionTitleFromFile(const std::wstring& path) {
     auto messages = ReadSessionMessages(path);
-    for (const auto& m : messages) {
-        if (m.role == L"user" && !m.text.empty()) return TrimTitle(m.text);
-    }
+    for (const auto& m : messages) if (m.role == L"user" && !m.text.empty()) return TrimTitle(m.text);
     return L"New chat";
 }
 
@@ -219,26 +235,16 @@ void RefreshSessionList() {
     std::filesystem::create_directories(SessionsDir());
     for (const auto& entry : std::filesystem::directory_iterator(SessionsDir())) {
         if (!entry.is_regular_file() || entry.path().extension() != L".jsonl") continue;
-        SessionItem item;
-        item.path = entry.path().wstring();
-        item.modified = entry.last_write_time();
-        item.title = SessionTitleFromFile(item.path);
-        gSessions.push_back(item);
+        gSessions.push_back({ SessionTitleFromFile(entry.path().wstring()), entry.path().wstring(), entry.last_write_time() });
     }
-    std::sort(gSessions.begin(), gSessions.end(), [](const SessionItem& a, const SessionItem& b) {
-        return a.modified > b.modified;
-    });
-
+    std::sort(gSessions.begin(), gSessions.end(), [](const SessionItem& a, const SessionItem& b) { return a.modified > b.modified; });
     SendMessageW(gSessionList, LB_RESETCONTENT, 0, 0);
     for (const auto& s : gSessions) SendMessageW(gSessionList, LB_ADDSTRING, 0, (LPARAM)s.title.c_str());
 }
 
 void SelectCurrentSessionInList() {
-    for (size_t i = 0; i < gSessions.size(); ++i) {
-        if (gSessions[i].path == gCurrentSessionPath) {
-            SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)i, 0);
-            return;
-        }
+    for (size_t i = 0; i < gSessions.size(); ++i) if (gSessions[i].path == gCurrentSessionPath) {
+        SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)i, 0); return;
     }
     SendMessageW(gSessionList, LB_SETCURSEL, (WPARAM)-1, 0);
 }
@@ -285,34 +291,12 @@ bool ParseUrl(const std::wstring& url, URL_COMPONENTS& uc, std::wstring& host, s
     return true;
 }
 
-std::wstring ExtractText(const std::string& json) {
-    std::string key = "\"text\":\"";
-    auto pos = json.find(key);
-    if (pos == std::string::npos) return Utf8ToWide(json);
-    pos += key.size();
-    std::string out;
-    bool esc = false;
-    for (; pos < json.size(); ++pos) {
-        char c = json[pos];
-        if (esc) {
-            if (c == 'n') out += '\n';
-            else if (c == 't') out += '\t';
-            else out += c;
-            esc = false;
-        } else if (c == '\\') esc = true;
-        else if (c == '"') break;
-        else out += c;
-    }
-    return Utf8ToWide(out);
-}
-
 std::wstring CallGemini(const std::wstring& prompt) {
     std::wstring base = gConfig.apiBase;
     if (!base.empty() && base.back() == L'/') base.pop_back();
+    bool official = base.find(L"generativelanguage.googleapis.com") != std::wstring::npos;
     std::wstring url = base + L"/v1beta/models/" + gConfig.model + L":generateContent";
-    if (base.find(L"generativelanguage.googleapis.com") != std::wstring::npos) {
-        url += L"?key=" + gConfig.apiKey;
-    }
+    if (official) url += L"?key=" + gConfig.apiKey;
 
     URL_COMPONENTS uc{};
     std::wstring host, path;
@@ -320,18 +304,20 @@ std::wstring CallGemini(const std::wstring& prompt) {
     if (uc.lpszExtraInfo) path += uc.lpszExtraInfo;
 
     DWORD access = gConfig.proxy.empty() ? WINHTTP_ACCESS_TYPE_DEFAULT_PROXY : WINHTTP_ACCESS_TYPE_NAMED_PROXY;
-    HINTERNET hSession = WinHttpOpen(L"Geai/0.2", access, gConfig.proxy.empty() ? WINHTTP_NO_PROXY_NAME : gConfig.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"Geai/0.3", access, gConfig.proxy.empty() ? WINHTTP_NO_PROXY_NAME : gConfig.proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"WinHttpOpen failed.";
-
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), uc.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return L"WinHttpConnect failed."; }
-
     DWORD flags = uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return L"WinHttpOpenRequest failed."; }
 
     std::string body = "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"" + JsonEscape(WideToUtf8(prompt)) + "\"}]}]}";
     std::wstring headers = L"Content-Type: application/json\r\n";
+    if (!official && !gConfig.apiKey.empty()) {
+        headers += L"X-Geai-Token: " + gConfig.apiKey + L"\r\n";
+        headers += L"Authorization: Bearer " + gConfig.apiKey + L"\r\n";
+    }
     BOOL ok = WinHttpSendRequest(hRequest, headers.c_str(), -1, (LPVOID)body.data(), (DWORD)body.size(), (DWORD)body.size(), 0);
     if (ok) ok = WinHttpReceiveResponse(hRequest, nullptr);
 
@@ -347,12 +333,9 @@ std::wstring CallGemini(const std::wstring& prompt) {
             response.append(buf.data(), read);
         } while (size > 0);
     }
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
     if (!ok) return L"Request failed.";
-    return ExtractText(response);
+    return ExtractGeminiReply(response);
 }
 
 INT_PTR CALLBACK SettingsProc(HWND dlg, UINT msg, WPARAM wp, LPARAM) {
@@ -383,54 +366,34 @@ void SendPrompt() {
     std::wstring prompt(len, 0);
     GetWindowTextW(gInput, prompt.data(), len + 1);
     SetWindowTextW(gInput, L"");
-
     gMessages.push_back({ L"user", prompt });
     AppendChat(L"user", prompt);
-    SaveCurrentSession();
-    RefreshSessionList();
-    SelectCurrentSessionInList();
-
+    SaveCurrentSession(); RefreshSessionList(); SelectCurrentSessionInList();
     EnableWindow(gSendBtn, FALSE);
-    AppendChat(L"system", L"Thinking...");
     std::wstring answer = CallGemini(prompt);
     gMessages.push_back({ L"assistant", answer });
     AppendChat(L"assistant", answer);
-    SaveCurrentSession();
-    RefreshSessionList();
-    SelectCurrentSessionInList();
+    SaveCurrentSession(); RefreshSessionList(); SelectCurrentSessionInList();
     EnableWindow(gSendBtn, TRUE);
     SetFocus(gInput);
 }
 
 void Layout(HWND hwnd) {
-    RECT rc{};
-    GetClientRect(hwnd, &rc);
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
-    int sideW = 260;
-    int pad = 14;
-    int topH = 48;
-    int inputH = 86;
-
+    RECT rc{}; GetClientRect(hwnd, &rc);
+    int w = rc.right, h = rc.bottom, sideW = 260, pad = 14, inputH = 86;
     MoveWindow(gSidebar, 0, 0, sideW, h, TRUE);
     MoveWindow(gNewBtn, 14, 14, 112, 32, TRUE);
     MoveWindow(gSettingsBtn, 136, 14, 110, 32, TRUE);
     MoveWindow(gSessionList, 12, 58, sideW - 24, h - 70, TRUE);
-
-    int x = sideW + pad;
-    int rw = w - sideW - pad * 2;
+    int x = sideW + pad, rw = w - sideW - pad * 2;
     MoveWindow(gChat, x, pad, rw, h - inputH - pad * 3, TRUE);
     MoveWindow(gInput, x, h - inputH - pad, rw - 116, inputH, TRUE);
     MoveWindow(gSendBtn, x + rw - 104, h - inputH - pad, 104, inputH, TRUE);
 }
 
-LRESULT CALLBACK SidebarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-    case WM_CREATE: {
+    case WM_CREATE:
         gSidebar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE, 0, 0, 260, 600, hwnd, nullptr, gInst, nullptr);
         gNewBtn = CreateWindowW(L"BUTTON", L"+ New chat", WS_CHILD | WS_VISIBLE, 14, 14, 112, 32, hwnd, (HMENU)IDC_NEW, gInst, nullptr);
         gSettingsBtn = CreateWindowW(L"BUTTON", L"Settings", WS_CHILD | WS_VISIBLE, 136, 14, 110, 32, hwnd, (HMENU)IDC_SETTINGS, gInst, nullptr);
@@ -438,34 +401,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         gChat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 274, 14, 700, 420, hwnd, (HMENU)IDC_CHAT, gInst, nullptr);
         gInput = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL, 274, 448, 580, 86, hwnd, (HMENU)IDC_INPUT, gInst, nullptr);
         gSendBtn = CreateWindowW(L"BUTTON", L"Send", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 868, 448, 104, 86, hwnd, (HMENU)IDC_SEND, gInst, nullptr);
-
-        SetControlFont(gNewBtn); SetControlFont(gSettingsBtn); SetControlFont(gSessionList);
-        SetControlFont(gChat); SetControlFont(gInput); SetControlFont(gSendBtn);
-        RefreshSessionList();
-        Layout(hwnd);
-        return 0;
-    }
-    case WM_SIZE:
-        Layout(hwnd); return 0;
+        SetControlFont(gNewBtn); SetControlFont(gSettingsBtn); SetControlFont(gSessionList); SetControlFont(gChat); SetControlFont(gInput); SetControlFont(gSendBtn);
+        RefreshSessionList(); Layout(hwnd); return 0;
+    case WM_SIZE: Layout(hwnd); return 0;
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_SEND) SendPrompt();
         else if (LOWORD(wp) == IDC_NEW) NewSession();
         else if (LOWORD(wp) == IDC_SETTINGS) DialogBoxW(gInst, MAKEINTRESOURCEW(101), hwnd, SettingsProc);
-        else if (LOWORD(wp) == IDC_SESSION_LIST && HIWORD(wp) == LBN_SELCHANGE) {
-            int sel = (int)SendMessageW(gSessionList, LB_GETCURSEL, 0, 0);
-            LoadSessionByIndex(sel);
-        } else if (LOWORD(wp) == IDM_DELETE_SESSION) {
-            DeleteSessionByIndex(gRightClickedSession);
-        }
+        else if (LOWORD(wp) == IDC_SESSION_LIST && HIWORD(wp) == LBN_SELCHANGE) LoadSessionByIndex((int)SendMessageW(gSessionList, LB_GETCURSEL, 0, 0));
+        else if (LOWORD(wp) == IDM_DELETE_SESSION) DeleteSessionByIndex(gRightClickedSession);
         return 0;
     case WM_CONTEXTMENU:
         if ((HWND)wp == gSessionList) {
-            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-            POINT client = pt;
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }, client = pt;
             ScreenToClient(gSessionList, &client);
-            int index = (int)SendMessageW(gSessionList, LB_ITEMFROMPOINT, 0, MAKELPARAM(client.x, client.y));
-            if (HIWORD(index) == 0) {
-                gRightClickedSession = LOWORD(index);
+            int hit = (int)SendMessageW(gSessionList, LB_ITEMFROMPOINT, 0, MAKELPARAM(client.x, client.y));
+            if (HIWORD(hit) == 0) {
+                gRightClickedSession = LOWORD(hit);
                 SendMessageW(gSessionList, LB_SETCURSEL, gRightClickedSession, 0);
                 HMENU menu = CreatePopupMenu();
                 AppendMenuW(menu, MF_STRING, IDM_DELETE_SESSION, L"Delete conversation");
@@ -475,25 +427,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_CTLCOLORSTATIC:
-        if ((HWND)lp == gSidebar) {
-            SetBkColor((HDC)wp, RGB(246, 247, 251));
-            return (INT_PTR)gPanelBrush;
-        }
+        if ((HWND)lp == gSidebar) { SetBkColor((HDC)wp, RGB(246,247,251)); return (INT_PTR)gPanelBrush; }
         break;
     case WM_CTLCOLOREDIT:
-        if ((HWND)lp == gChat || (HWND)lp == gInput) {
-            SetBkColor((HDC)wp, RGB(255, 255, 255));
-            SetTextColor((HDC)wp, RGB(32, 33, 36));
-            return (INT_PTR)gInputBrush;
-        }
+        if ((HWND)lp == gChat || (HWND)lp == gInput) { SetBkColor((HDC)wp, RGB(255,255,255)); SetTextColor((HDC)wp, RGB(32,33,36)); return (INT_PTR)gInputBrush; }
         break;
     case WM_CTLCOLORLISTBOX:
-        SetBkColor((HDC)wp, RGB(246, 247, 251));
-        SetTextColor((HDC)wp, RGB(32, 33, 36));
-        return (INT_PTR)gPanelBrush;
+        SetBkColor((HDC)wp, RGB(246,247,251)); SetTextColor((HDC)wp, RGB(32,33,36)); return (INT_PTR)gPanelBrush;
     case WM_DESTROY:
-        SaveCurrentSession();
-        PostQuitMessage(0); return 0;
+        SaveCurrentSession(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -502,13 +444,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     gInst = hInstance;
     InitCommonControls();
     LoadConfig();
-
     gFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    gTitleFont = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    gBgBrush = CreateSolidBrush(RGB(255, 255, 255));
-    gPanelBrush = CreateSolidBrush(RGB(246, 247, 251));
-    gInputBrush = CreateSolidBrush(RGB(255, 255, 255));
-
+    gBgBrush = CreateSolidBrush(RGB(255,255,255));
+    gPanelBrush = CreateSolidBrush(RGB(246,247,251));
+    gInputBrush = CreateSolidBrush(RGB(255,255,255));
     WNDCLASSW wc{};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
@@ -516,21 +455,11 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = gBgBrush;
     RegisterClassW(&wc);
-
     gMain = CreateWindowW(L"GeaiWindow", L"Geai - Gemini Windows Client", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1040, 700, nullptr, nullptr, hInstance, nullptr);
     ShowWindow(gMain, nCmdShow);
     UpdateWindow(gMain);
-
     MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-
-    DeleteObject(gFont);
-    DeleteObject(gTitleFont);
-    DeleteObject(gBgBrush);
-    DeleteObject(gPanelBrush);
-    DeleteObject(gInputBrush);
+    while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    DeleteObject(gFont); DeleteObject(gBgBrush); DeleteObject(gPanelBrush); DeleteObject(gInputBrush);
     return 0;
 }
