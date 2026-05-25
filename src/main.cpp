@@ -24,6 +24,9 @@
 #define IDM_DELETE_SESSION 3001
 #define WM_GEAI_RESPONSE (WM_APP + 1)
 
+static const wchar_t* SEND_BUTTON_TEXT = L"Send\r\nCtrl+Enter";
+static const wchar_t* THINKING_BUTTON_TEXT = L"Gemini\r\n正在思考...";
+
 struct Config {
     std::wstring apiKey;
     std::wstring apiBase = L"https://generativelanguage.googleapis.com";
@@ -37,6 +40,7 @@ struct PendingResponse { std::wstring text; };
 
 static HINSTANCE gInst;
 static HWND gMain, gSidebar, gSessionList, gChat, gInput, gSendBtn, gNewBtn, gSettingsBtn;
+static WNDPROC gInputOldProc = nullptr;
 static HFONT gFont;
 static HBRUSH gBgBrush, gPanelBrush, gInputBrush;
 static Config gConfig;
@@ -45,6 +49,8 @@ static std::vector<SessionItem> gSessions;
 static std::wstring gCurrentSessionPath;
 static int gRightClickedSession = -1;
 static bool gRequestInFlight = false;
+
+void SendPrompt();
 
 std::wstring NormalizeNewlines(const std::wstring& s) {
     std::wstring out;
@@ -401,13 +407,21 @@ void SendPrompt() {
     gRequestInFlight = true;
     EnableWindow(gSendBtn, FALSE);
     EnableWindow(gInput, FALSE);
-    SetWindowTextW(gSendBtn, L"...");
+    SetWindowTextW(gSendBtn, THINKING_BUTTON_TEXT);
     Config cfg = gConfig;
     HWND hwnd = gMain;
     std::thread([prompt, cfg, hwnd]() {
         auto* result = new PendingResponse{ CallGeminiWithConfig(prompt, cfg) };
         PostMessageW(hwnd, WM_GEAI_RESPONSE, 0, (LPARAM)result);
     }).detach();
+}
+
+LRESULT CALLBACK InputProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_KEYDOWN && wp == VK_RETURN && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        SendPrompt();
+        return 0;
+    }
+    return CallWindowProcW(gInputOldProc, hwnd, msg, wp, lp);
 }
 
 void Layout(HWND hwnd) {
@@ -419,8 +433,8 @@ void Layout(HWND hwnd) {
     MoveWindow(gSessionList, 12, 58, sideW - 24, h - 70, TRUE);
     int x = sideW + pad, rw = w - sideW - pad * 2;
     MoveWindow(gChat, x, pad, rw, h - inputH - pad * 3, TRUE);
-    MoveWindow(gInput, x, h - inputH - pad, rw - 116, inputH, TRUE);
-    MoveWindow(gSendBtn, x + rw - 104, h - inputH - pad, 104, inputH, TRUE);
+    MoveWindow(gInput, x, h - inputH - pad, rw - 132, inputH, TRUE);
+    MoveWindow(gSendBtn, x + rw - 120, h - inputH - pad, 120, inputH, TRUE);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -432,7 +446,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         gSessionList = CreateWindowExW(0, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, 12, 58, 236, 520, hwnd, (HMENU)IDC_SESSION_LIST, gInst, nullptr);
         gChat = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 274, 14, 700, 420, hwnd, (HMENU)IDC_CHAT, gInst, nullptr);
         gInput = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL, 274, 448, 580, 86, hwnd, (HMENU)IDC_INPUT, gInst, nullptr);
-        gSendBtn = CreateWindowW(L"BUTTON", L"Send", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 868, 448, 104, 86, hwnd, (HMENU)IDC_SEND, gInst, nullptr);
+        gSendBtn = CreateWindowW(L"BUTTON", SEND_BUTTON_TEXT, WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | BS_MULTILINE, 868, 448, 120, 86, hwnd, (HMENU)IDC_SEND, gInst, nullptr);
+        gInputOldProc = (WNDPROC)SetWindowLongPtrW(gInput, GWLP_WNDPROC, (LONG_PTR)InputProc);
         SetControlFont(gNewBtn); SetControlFont(gSettingsBtn); SetControlFont(gSessionList); SetControlFont(gChat); SetControlFont(gInput); SetControlFont(gSendBtn);
         RefreshSessionList(); Layout(hwnd); return 0;
     case WM_GEAI_RESPONSE: {
@@ -445,7 +460,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         gRequestInFlight = false;
         EnableWindow(gInput, TRUE);
         EnableWindow(gSendBtn, TRUE);
-        SetWindowTextW(gSendBtn, L"Send");
+        SetWindowTextW(gSendBtn, SEND_BUTTON_TEXT);
         SetFocus(gInput);
         return 0;
     }
