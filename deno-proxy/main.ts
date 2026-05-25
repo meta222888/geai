@@ -16,6 +16,24 @@ function json(data: unknown, init: ResponseInit = {}) {
   return Response.json(data, { ...init, headers });
 }
 
+function text(data: string, init: ResponseInit = {}) {
+  const headers = new Headers(init.headers);
+  for (const [k, v] of Object.entries(corsHeaders())) headers.set(k, v);
+  headers.set("content-type", "text/plain; charset=utf-8");
+  return new Response(data, { ...init, headers });
+}
+
+function extractGeminiText(data: any): string {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts)) {
+    const out = parts.map((p) => p?.text ?? "").filter(Boolean).join("\n").trim();
+    if (out) return out;
+  }
+  const msg = data?.error?.message;
+  if (typeof msg === "string" && msg.length > 0) return `Error: ${msg}`;
+  return JSON.stringify(data, null, 2);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -57,12 +75,17 @@ Deno.serve(async (req: Request) => {
     body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
   });
 
-  const outHeaders = new Headers(resp.headers);
-  for (const [k, v] of Object.entries(corsHeaders())) outHeaders.set(k, v);
-
-  return new Response(resp.body, {
-    status: resp.status,
-    statusText: resp.statusText,
-    headers: outHeaders,
-  });
+  const raw = await resp.text();
+  try {
+    const data = JSON.parse(raw);
+    return text(extractGeminiText(data), {
+      status: resp.ok ? 200 : resp.status,
+      statusText: resp.statusText,
+    });
+  } catch {
+    return text(raw, {
+      status: resp.status,
+      statusText: resp.statusText,
+    });
+  }
 });
