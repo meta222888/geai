@@ -8,33 +8,96 @@ Geai 是一个小巧的原生 Windows Gemini 客户端。目标是：不用 Elec
 
 - 原生 Win32 GUI，小巧、启动快
 - Gemini API Key 设置
-- API Base URL 设置，可直接使用官方 Gemini API 或自建代理
+- API Base URL 设置，可直接使用官方 Gemini API 或自建 Deno 代理
 - HTTP/HTTPS 代理设置
 - 本地会话记录，JSONL 自动保存
 - 左侧会话列表，最近聊天在最上面
 - 右键删除会话
 - 客户端自动提取 Gemini 正文，不直接显示完整 JSON
 - Deno Deploy 免费代理示例
-- Deno 代理认证示例，避免代理被公开滥用
+- Deno 代理认证，避免代理被公开滥用
 - CMake + GitHub Actions Windows 构建
 - Windows `.bat` 一键调试运行 / Release 打包脚本
 
-## 使用 Deno 认证代理
+## Geai 客户端设置
 
-推荐使用认证版代理：
+首次启动后点击 **Settings**：
 
 ```text
-deno-proxy/authenticated-main.ts
+API Base = https://你的-deno-地址
+API Key = 你的 GEAI_PROXY_TOKEN
+Model = gemini-2.5-flash
+Proxy = 留空，或 http://127.0.0.1:7890
 ```
 
-Deno Deploy 环境变量设置：
+说明：
+
+- 直接使用 Gemini 官方 API 时，`API Key` 填 Gemini API Key
+- 使用 Deno 代理时，`API Key` 填 `GEAI_PROXY_TOKEN`
+- 使用 Deno 代理时，真正的 Gemini API Key 只放在 Deno Deploy 环境变量里
+- 客户端会通过 `X-Geai-Token` 请求头发送认证 token
+
+## 在 Deno Deploy 上部署认证代理
+
+当前默认代理入口文件就是认证版：
+
+```text
+deno-proxy/main.ts
+```
+
+### 1. 创建 Deno Deploy 项目
+
+打开 Deno Deploy，新建 Project。
+
+### 2. 选择 GitHub 部署
+
+推荐选择 **Deploy from GitHub**，绑定本仓库：
+
+```text
+meta222888/geai
+```
+
+入口文件填写：
+
+```text
+deno-proxy/main.ts
+```
+
+### 3. 设置环境变量
+
+在 Deno Deploy 项目的 Environment Variables 中添加：
 
 ```text
 GEMINI_API_KEY=你的 Gemini API Key
 GEAI_PROXY_TOKEN=你自己设置的一串随机密码
 ```
 
-Geai 客户端 Settings：
+`GEAI_PROXY_TOKEN` 就是代理访问密码。不要使用太短的值，建议使用随机字符串。
+
+### 4. Deploy / Redeploy
+
+保存环境变量后，必须重新 Deploy。部署完成后打开：
+
+```text
+https://你的-deno-地址/health
+```
+
+正常会看到类似：
+
+```json
+{
+  "ok": true,
+  "name": "Geai Gemini Proxy",
+  "hasGeminiApiKey": true,
+  "hasProxyToken": true
+}
+```
+
+如果 `hasProxyToken` 是 `false`，说明 `GEAI_PROXY_TOKEN` 没有配置成功，或者配置后没有重新部署。
+
+### 5. 在 Geai 中使用 Deno 代理
+
+Geai Settings：
 
 ```text
 API Base = https://你的-deno-地址
@@ -42,12 +105,35 @@ API Key = GEAI_PROXY_TOKEN 的值
 Model = gemini-2.5-flash
 ```
 
-说明：
+如果 `API Key` 留空或填错，代理会返回：
 
-- 直接使用 Gemini 官方 API 时，API Key 就是 Gemini API Key
-- 使用 Deno 代理时，API Key 作为代理认证 token 使用
-- 客户端会通过 `X-Geai-Token` 请求头发送认证 token
-- Deno 代理会在服务端使用 `GEMINI_API_KEY` 调用 Gemini
+```text
+Error: Unauthorized
+```
+
+## Deno 本地运行认证代理
+
+```bash
+cd deno-proxy
+export GEMINI_API_KEY="你的 Gemini API Key"
+export GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
+deno run --allow-net --allow-env main.ts
+```
+
+Windows PowerShell：
+
+```powershell
+cd deno-proxy
+$env:GEMINI_API_KEY="你的 Gemini API Key"
+$env:GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
+deno run --allow-net --allow-env main.ts
+```
+
+本地 API Base：
+
+```text
+http://localhost:8000
+```
 
 ## 开发环境运行
 
@@ -103,30 +189,6 @@ cmake --build build --config Release
 
 ```text
 build/Release/Geai.exe
-```
-
-## Deno 本地运行认证代理
-
-```bash
-cd deno-proxy
-export GEMINI_API_KEY="你的 Gemini API Key"
-export GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
-deno run --allow-net --allow-env authenticated-main.ts
-```
-
-Windows PowerShell：
-
-```powershell
-cd deno-proxy
-$env:GEMINI_API_KEY="你的 Gemini API Key"
-$env:GEAI_PROXY_TOKEN="你自己设置的一串随机密码"
-deno run --allow-net --allow-env authenticated-main.ts
-```
-
-本地 API Base：
-
-```text
-http://localhost:8000
 ```
 
 ## 项目结构
